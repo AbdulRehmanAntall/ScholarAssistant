@@ -1,17 +1,10 @@
-<<<<<<< HEAD
 from fastapi import APIRouter,Depends,Path,HTTPException,Query,UploadFile,File
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List,Optional
 from app.utils.pdf_parser import extract_text_and_formulas
 from app.utils.text_cleanup import clean_extracted_text
-
+from app.services.summarizer_service import summarize_text
 from PyPDF2 import PdfReader
-=======
-from fastapi import APIRouter,Depends,Path,HTTPException,Query
-from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List,Optional
-
->>>>>>> 67c81f5988411e19545807910e958b22cd513c65
 
 router = APIRouter(
     prefix="/pdfs",
@@ -21,7 +14,6 @@ router = APIRouter(
 
 @router.get("/")
 async def return_pdf_api_status():
-<<<<<<< HEAD
     return {"status": "PDF API is running"}
 
 
@@ -33,18 +25,18 @@ async def extract_text_and_math(file: UploadFile = File(...)):
     try:
         file_bytes = await file.read()
         result = extract_text_and_formulas(file.filename, file_bytes)
+        summary = summarize_text(result["text"]) if result["text"] else "No text to summarize."
+        result["summary"] = summary
         if result["text"]:
             result["text"] = clean_extracted_text(result["text"])
 
         return {
             "filename": file.filename,
             "text": result["text"],
+            "summary": result["summary"],
             "formulas": result["formulas"]
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error parsing file: {str(e)}")
-=======
-    return {"status": "PDF API is running"}
->>>>>>> 67c81f5988411e19545807910e958b22cd513c65
