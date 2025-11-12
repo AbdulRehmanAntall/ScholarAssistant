@@ -2,102 +2,165 @@ import streamlit as st
 import requests
 
 # -----------------------
-# 🎨 Page Configuration
+# 🎨 Page Config
 # -----------------------
 st.set_page_config(page_title="📄 ScholarAssistant", layout="wide")
-st.title("📄 ScholarAssistant: Talk with Your PDF")
+st.title("📄 ScholarAssistant")
 
 # -----------------------
-# 💾 Session State Setup
+# 🧭 Sidebar Navigation
 # -----------------------
-if "pdf_text" not in st.session_state:
-    st.session_state.pdf_text = ""
-if "pdf_summary" not in st.session_state:
-    st.session_state.pdf_summary = ""
-if "conversation_history" not in st.session_state:
-    st.session_state.conversation_history = []
-if "uploaded_filename" not in st.session_state:
-    st.session_state.uploaded_filename = None
+app_mode = st.sidebar.radio("Choose Feature:", ["Chat with PDF", "Citation Recommender"])
 
 # -----------------------
-# 🧭 Sidebar: Upload Area
+# 1️⃣ Chat with PDF
 # -----------------------
-st.sidebar.header("📤 Upload PDF")
+if app_mode == "Chat with PDF":
+    # --- Session States ---
+    for key in ["pdf_text", "pdf_summary", "conversation_history", "uploaded_filename"]:
+        if key not in st.session_state:
+            st.session_state[key] = "" if "text" in key or key == "uploaded_filename" else []
 
-uploaded_file = st.sidebar.file_uploader("Upload a PDF file", type="pdf")
+    # --- Upload PDF ---
+    st.sidebar.header("📤 Upload PDF")
+    uploaded_file = st.sidebar.file_uploader("Upload a PDF file", type="pdf")
 
-# If a new PDF is uploaded, reset the previous data
-if uploaded_file:
-    if uploaded_file.name != st.session_state.uploaded_filename:
-        # New file detected → clear old data
-        st.session_state.pdf_text = ""
-        st.session_state.pdf_summary = ""
+    if uploaded_file:
+        if uploaded_file.name != st.session_state.uploaded_filename:
+            st.session_state.pdf_text = ""
+            st.session_state.pdf_summary = ""
+            st.session_state.conversation_history = []
+            st.session_state.uploaded_filename = uploaded_file.name
+
+            files = {"files": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
+            with st.spinner("📚 Extracting and summarizing your PDF..."):
+                response = requests.post("http://127.0.0.1:8000/pdf/upload", files=files)
+            
+            if response.status_code == 200:
+                data = response.json()
+                st.session_state.pdf_text = data["pdf_texts"][0]
+                st.session_state.pdf_summary = data["summaries"][0]
+                st.sidebar.success(f"✅ '{uploaded_file.name}' uploaded successfully!")
+            else:
+                st.sidebar.error("❌ Error uploading the PDF.")
+
+    if st.sidebar.button("🗑️ Clear Chat"):
         st.session_state.conversation_history = []
-        st.session_state.uploaded_filename = uploaded_file.name
+        st.sidebar.info("Chat history cleared.")
 
-        files = {"files": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
-        with st.spinner("📚 Extracting and summarizing your PDF..."):
-            response = requests.post("http://127.0.0.1:8000/pdf/upload", files=files)
+    # --- PDF Summary ---
+    if st.session_state.pdf_summary:
+        st.subheader("📝 PDF Summary")
+        st.info(st.session_state.pdf_summary)
 
-        if response.status_code == 200:
-            data = response.json()
-            st.session_state.pdf_text = data["pdf_texts"][0]
-            st.session_state.pdf_summary = data["summaries"][0]
-            st.sidebar.success(f"✅ '{uploaded_file.name}' uploaded successfully!")
+    # --- Chat Interface ---
+    st.subheader("💬 Chat with Your PDF")
+    for chat in st.session_state.conversation_history:
+        with st.chat_message(chat["role"]):
+            st.markdown(chat["content"])
+
+    question = st.chat_input("Ask a question about the uploaded PDF...")
+    if question:
+        if not st.session_state.pdf_text:
+            st.warning("Please upload a PDF first.")
         else:
-            st.sidebar.error("❌ Error uploading the PDF.")
+            st.chat_message("user").markdown(question)
+            st.session_state.conversation_history.append({"role": "user", "content": question})
 
-# Optional: Button to clear chat manually
-if st.sidebar.button("🗑️ Clear Chat"):
-    st.session_state.conversation_history = []
-    st.sidebar.info("Chat history cleared.")
-
-# -----------------------
-# 📋 Display PDF Summary
-# -----------------------
-if st.session_state.pdf_summary:
-    st.subheader("📝 PDF Summary")
-    st.info(st.session_state.pdf_summary)
-
-# -----------------------
-# 💬 Chat Interface
-# -----------------------
-st.subheader("💬 Chat with Your PDF")
-
-# Show previous conversation (chat-style)
-for chat in st.session_state.conversation_history:
-    with st.chat_message(chat["role"]):
-        st.markdown(chat["content"])
-
-# Input for the next question
-question = st.chat_input("Ask a question about the uploaded PDF...")
+            payload = {
+                "pdf_texts": [st.session_state.pdf_text],
+                "question": question,
+                "conversation_history": "\n".join(
+                    [f"{msg['role'].capitalize()}: {msg['content']}" for msg in st.session_state.conversation_history]
+                ),
+            }
+            with st.spinner("🤔 Thinking..."):
+                response = requests.post("http://127.0.0.1:8000/pdf/question", json=payload)
+            if response.status_code == 200:
+                answer = response.json()["answer"]
+                with st.chat_message("assistant"):
+                    st.markdown(answer)
+                st.session_state.conversation_history.append({"role": "assistant", "content": answer})
+            else:
+                st.error(f"❌ Error generating answer: {response.text}")
 
 # -----------------------
-# ⚡ Send Question to Backend
+# 2️⃣ Citation Recommender
 # -----------------------
-if question:
-    if not st.session_state.pdf_text:
-        st.warning("Please upload a PDF first.")
-    else:
-        # Display user message immediately
-        st.chat_message("user").markdown(question)
-        st.session_state.conversation_history.append({"role": "user", "content": question})
+elif app_mode == "Citation Recommender":
+    # --- Session States ---
+    for key in ["citation_results", "search_query", "text_input"]:
+        if key not in st.session_state:
+            st.session_state[key] = [] if key == "citation_results" else ""
 
-        payload = {
-            "pdf_texts": [st.session_state.pdf_text],
-            "question": question,
-            "conversation_history": "\n".join(
-                [f"{msg['role'].capitalize()}: {msg['content']}" for msg in st.session_state.conversation_history]
-            ),
-        }
+    st.subheader("📚 Citation Recommender")
 
-        with st.spinner("🤔 Thinking..."):
-            response = requests.post("http://127.0.0.1:8000/pdf/question", json=payload)
+    # --- Input Form ---
+    with st.form("citation_form", clear_on_submit=False):
+        st.session_state.text_input = st.text_area(
+            "Paste your paragraph or abstract here:", 
+            height=200, 
+            value=st.session_state.text_input
+        )
+        submitted = st.form_submit_button("🔍 Find Relevant Citations")
 
-        if response.status_code == 200:
-            answer = response.json()["answer"]
-            with st.chat_message("assistant"):
-                st.markdown(answer)
-            st.session_state.conversation_history.append({"role": "assistant", "content": answer})
+    # --- API Call ---
+    if submitted:
+        if not st.session_state.text_input.strip():
+            st.warning("Please enter some text!")
         else:
-            st.error(f"❌ Error generating answer: {response.text}")
+            with st.spinner("Generating query and fetching papers..."):
+                try:
+                    API_URL = "http://localhost:8000/citation_router/recommend"
+                    response = requests.post(API_URL, json={"text": st.session_state.text_input})
+                    response.raise_for_status()
+                    data = response.json()
+
+                    st.session_state.search_query = data["query"]
+                    st.session_state.citation_results = data["results"]
+
+                except Exception as e:
+                    st.error(f"❌ Error: {e}")
+
+        # --- Display Results ---
+        # --- Display Results ---
+    if st.session_state.citation_results:
+        st.markdown("### 🔍 Generated Search Query")
+        st.info(st.session_state.search_query)
+
+        st.markdown("### 📄 Top Papers")
+        for paper in st.session_state.citation_results:
+            with st.container():
+                st.markdown(
+                    f"""
+                    <div style="border:1px solid #e0e0e0; padding:15px; border-radius:10px; margin-bottom:10px; background-color:#f9f9f9">
+                        <h4 style="margin:0; color:#2B7A78;">{paper['title']}</h4>
+                        <p style="margin:0; font-size:14px; color:#555;"><strong>Authors:</strong> {', '.join(paper['authors'])}</p>
+                        <p style="margin:0; font-size:14px; color:#555;"><strong>Published:</strong> {paper['published']}</p>
+                        <p style="margin:0; font-size:14px; color:#555;"><strong>Semantic Score:</strong> {paper['score']:.4f}</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+                # Collapsible Abstract using Streamlit expander
+                with st.expander("📖 Abstract"):
+                    st.write(paper['summary'])
+
+                # ArXiv link
+                st.markdown(f"[🔗 View on ArXiv]({paper['link']})")
+
+                # BibTeX download
+                bibtex = f"""@article{{,
+    title={{ {paper['title']} }},
+    author={{ {', '.join(paper['authors'])} }},
+    journal={{ arXiv }},
+    year={{ {paper['published'][:4]} }},
+    url={{ {paper['link']} }}
+    }}"""
+                st.download_button(
+                    label="📥 Download BibTeX",
+                    data=bibtex,
+                    file_name=f"{paper['title']}.bib",
+                    mime="text/plain",
+                    key=f"bib_{paper['title']}"
+                )

@@ -2,7 +2,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 from langchain_core.output_parsers import StrOutputParser
 from dotenv import load_dotenv
-
+import asyncio
 load_dotenv()
 
 # Shared model instance
@@ -111,3 +111,33 @@ def answer_question(pdf_texts: list, question: str, conversation_history: str) -
         "question": question,
         "history": conversation_history
     })
+
+async def generate_search_query(text: str) -> list[str]:
+    """
+    Generate multiple concise search keywords/queries from user-provided text
+    using PromptTemplate -> LLM -> parser pattern.
+    Returns a list of search queries.
+    """
+    prompt = PromptTemplate(
+        input_variables=["text"],
+        template=(
+            "You are an academic research assistant.\n"
+            "Given the following paragraph, generate 3-5 concise search queries "
+            "focusing on technical keywords, concepts, and relevant terminology. "
+            "Return them as a comma-separated list.\n\n"
+            "Paragraph:\n{text}\n\n"
+            "Output only a comma-separated list of concise queries suitable for scholarly search."
+        )
+    )
+
+    chain = prompt | llm | parser
+
+    try:
+        # Get the raw comma-separated string
+        result = chain.invoke({"text": text})
+        # Split by comma and clean whitespace
+        queries = [q.strip() for q in result.split(",") if q.strip()]
+        return queries
+    except Exception as e:
+        print(f"Error generating search queries: {e}")
+        return []

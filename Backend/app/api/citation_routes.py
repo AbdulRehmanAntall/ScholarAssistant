@@ -1,14 +1,89 @@
-from fastapi import APIRouter,Depends,Path,HTTPException,Query
-from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List,Optional
-
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from typing import List, Dict
+import asyncio
+import arxiv
+import openai
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+from app.services.summarizer_service import generate_search_query
+from app.services.arxiv_service import search_arxiv
 
 router = APIRouter(
-    prefix="/citations",
-    tags=["citations"],
+    prefix="/citation_router",
+    tags=["citation_router"],
 )
 
+# -----------------------
+# Pydantic models
+# -----------------------
+class CitationRequest(BaseModel):
+    text: str
 
-@router.get("/")
-async def return_citattion_api_status():
-    return {"status": "Citation API is running"}
+class Paper(BaseModel):
+    title: str
+    authors: List[str]
+    summary: str
+    link: str
+    published: str
+    score: float  # similarity score
+
+class CitationResponse(BaseModel):
+    query: str
+    results: List[Paper]
+
+
+async def get_embedding(text: str, model: str = "text-embedding-3-large") -> list[float]:
+    """
+    Generate vector embedding for text using OpenAI >=1.0 API
+    Works asynchronously with await.
+    """
+    resp = openai.embeddings.create(
+        model=model,
+        input=text
+    )
+    return resp.data[0].embedding
+
+# -----------------------
+# Semantic citation recommender
+# -----------------------
+@router.post("/recommend", response_model=CitationResponse)
+async def recommend_citation(request: CitationRequest):
+    if not request.text.strip():
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+
+    user_text = request.text
+    print("Received text:", user_text)
+
+    # Step 1: Generate high-quality search queries from text
+    queries = await generate_search_query(user_text)  # e.g., 3-5 queries
+    print("Generated queries:", queries)
+
+    # Step 2: Get embedding of user input
+    user_embedding = await get_embedding(user_text)
+
+    # Step 3: Fetch candidate papers for all queries
+    candidate_papers = []
+    for query in queries:
+        papers = await search_arxiv(query, max_results=5)
+        candidate_papers.extend(papers)
+
+    # Step 4: Compute embeddings for paper abstracts and semantic similarity
+    for paper in candidate_papers:
+        paper_embedding = await get_embedding(paper["summary"])
+        score = cosine_similarity(
+            np.array(user_embedding).reshape(1, -1),
+            np.array(paper_embedding).reshape(1, -1)
+        )[0][0]
+        paper["score"] = float(score)
+
+    # Step 5: Deduplicate papers by link
+    unique_papers = {p['link']: p for p in candidate_papers}.values()
+
+    # Step 6: Rank papers by similarity score
+    ranked_papers = sorted(unique_papers, key=lambda x: x["score"], reverse=True)
+
+    return {
+        "query": ", ".join(queries),
+        "results": ranked_papers[:10]  # return top 10
+    }
