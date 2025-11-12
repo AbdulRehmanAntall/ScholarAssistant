@@ -1,93 +1,103 @@
 import streamlit as st
-from dotenv import load_dotenv
-from PyPDF2 import PdfReader
-from langchain.text_splitter import CharacterTextSplitter
-from langchain.embeddings import OpenAIEmbeddings
-from langchain.vectorstores import FAISS
-from langchain.memory import ConversationBufferMemory
-from langchain.chains import ConversationalRetrievalChain
-from langchain.chat_models import ChatOpenAI
-from html_templates import css, bot_template, user_template
+import requests
 
+# -----------------------
+# 🎨 Page Configuration
+# -----------------------
+st.set_page_config(page_title="📄 ScholarAssistant", layout="wide")
+st.title("📄 ScholarAssistant: Talk with Your PDF")
 
-def get_pdf_text(pdf_docs):
-    text = ""
-    for pdf in pdf_docs:
-        pdf_reader = PdfReader(pdf)
-        for page in pdf_reader.pages:
-            text += page.extract_text()
-    return text
+# -----------------------
+# 💾 Session State Setup
+# -----------------------
+if "pdf_text" not in st.session_state:
+    st.session_state.pdf_text = ""
+if "pdf_summary" not in st.session_state:
+    st.session_state.pdf_summary = ""
+if "conversation_history" not in st.session_state:
+    st.session_state.conversation_history = []
+if "uploaded_filename" not in st.session_state:
+    st.session_state.uploaded_filename = None
 
-def get_text_chunks(text):
-    text_splitter = CharacterTextSplitter(
-        separator="\n",
-        chunk_size=1000,
-        chunk_overlap=200,
-        length_function=len
-    )
+# -----------------------
+# 🧭 Sidebar: Upload Area
+# -----------------------
+st.sidebar.header("📤 Upload PDF")
 
-    chunks= text_splitter.split_text(text)
-    return chunks
+uploaded_file = st.sidebar.file_uploader("Upload a PDF file", type="pdf")
 
-def create_vector_store(text_chunks):
-    embeddings = OpenAIEmbeddings()
-    vector_store = FAISS.from_texts(texts=text_chunks, embedding=embeddings)
-    return vector_store
+# If a new PDF is uploaded, reset the previous data
+if uploaded_file:
+    if uploaded_file.name != st.session_state.uploaded_filename:
+        # New file detected → clear old data
+        st.session_state.pdf_text = ""
+        st.session_state.pdf_summary = ""
+        st.session_state.conversation_history = []
+        st.session_state.uploaded_filename = uploaded_file.name
 
-def get_conversation_chain(vector_store):
-    llm=ChatOpenAI()
-    memory= ConversationBufferMemory(memory_key="chat_history", return_messages=True)
-    conversation_chain=ConversationalRetrievalChain.from_llm(
-        llm=llm,
-        retriever=vector_store.as_retriever(),
-        memory=memory
-    )
-    return conversation_chain
+        files = {"files": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
+        with st.spinner("📚 Extracting and summarizing your PDF..."):
+            response = requests.post("http://127.0.0.1:8000/pdf/upload", files=files)
 
-def handle_question(user_question):
-    response = st.session_state.conversation({"question": user_question})
-    st.session_state.chat_history = response["chat_history"]
-    for i, message in enumerate(st.session_state.chat_history):
-        if i % 2 == 0:
-            st.write(user_template.replace("{{MSG}}", message.content), unsafe_allow_html=True)
+        if response.status_code == 200:
+            data = response.json()
+            st.session_state.pdf_text = data["pdf_texts"][0]
+            st.session_state.pdf_summary = data["summaries"][0]
+            st.sidebar.success(f"✅ '{uploaded_file.name}' uploaded successfully!")
         else:
-            st.write(bot_template.replace("{{MSG}}", message.content), unsafe_allow_html=True)
+            st.sidebar.error("❌ Error uploading the PDF.")
 
+# Optional: Button to clear chat manually
+if st.sidebar.button("🗑️ Clear Chat"):
+    st.session_state.conversation_history = []
+    st.sidebar.info("Chat history cleared.")
 
-def main():
+# -----------------------
+# 📋 Display PDF Summary
+# -----------------------
+if st.session_state.pdf_summary:
+    st.subheader("📝 PDF Summary")
+    st.info(st.session_state.pdf_summary)
 
-    if "conversation" not in st.session_state:
-        st.session_state.conversation = None
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
+# -----------------------
+# 💬 Chat Interface
+# -----------------------
+st.subheader("💬 Chat with Your PDF")
 
-    st.write(css, unsafe_allow_html=True)
+# Show previous conversation (chat-style)
+for chat in st.session_state.conversation_history:
+    with st.chat_message(chat["role"]):
+        st.markdown(chat["content"])
 
-    load_dotenv()
-    st.set_page_config(page_title="Scholar Assistant",page_icon=":books:" ,layout="wide")
-    st.title("Chat with your Research Papers PDFs :books:  ")
+# Input for the next question
+question = st.chat_input("Ask a question about the uploaded PDF...")
 
-    user_question=st.text_input("Ask a question:")
-    if user_question:
-        handle_question(user_question)
+# -----------------------
+# ⚡ Send Question to Backend
+# -----------------------
+if question:
+    if not st.session_state.pdf_text:
+        st.warning("Please upload a PDF first.")
+    else:
+        # Display user message immediately
+        st.chat_message("user").markdown(question)
+        st.session_state.conversation_history.append({"role": "user", "content": question})
 
+        payload = {
+            "pdf_texts": [st.session_state.pdf_text],
+            "question": question,
+            "conversation_history": "\n".join(
+                [f"{msg['role'].capitalize()}: {msg['content']}" for msg in st.session_state.conversation_history]
+            ),
+        }
 
-    with st.sidebar:
-        st.subheader("Your PDFs")
-        pdf_docs= st.file_uploader("Upload your PDF files", type=["pdf"], accept_multiple_files=True)
-        if  st.button("Process PDFs"):
-            with st.spinner("Processing"):
-                #get pdf text
-                raw_text = get_pdf_text(pdf_docs) 
-                
-                #get text chunks
-                text_chunks = get_text_chunks(raw_text)
-                #create vector store
-                vector_store = create_vector_store(text_chunks)
-                #create conversation chain
-                st.session_state.conversation=get_conversation_chain(vector_store)
-                pass
+        with st.spinner("🤔 Thinking..."):
+            response = requests.post("http://127.0.0.1:8000/pdf/question", json=payload)
 
-if __name__ == "__main__":
-    main()
-   
+        if response.status_code == 200:
+            answer = response.json()["answer"]
+            with st.chat_message("assistant"):
+                st.markdown(answer)
+            st.session_state.conversation_history.append({"role": "assistant", "content": answer})
+        else:
+            st.error(f"❌ Error generating answer: {response.text}")

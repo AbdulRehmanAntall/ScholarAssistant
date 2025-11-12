@@ -1,35 +1,61 @@
-from langchain.prompts import PromptTemplate
-from langchain.chat_models import ChatOpenAI
-from langchain.chains import LLMChain
+from langchain_core.prompts import PromptTemplate
+from langchain_openai import ChatOpenAI
+from langchain_core.output_parsers import StrOutputParser
 from dotenv import load_dotenv
 
 load_dotenv()
 
+# Shared model instance
+llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.3)
+parser = StrOutputParser()
+
+# ---------------------------
+# 1️⃣ Summarize Text
+# ---------------------------
 def summarize_text(text: str) -> str:
     prompt = PromptTemplate(
         input_variables=["text"],
-        template = (
-        "You are an expert academic researcher tasked with summarizing complex scholarly material.\n"
-        "Read the following academic text carefully and produce a structured, professional summary that:\n"
-        "- Captures the central argument, objectives, and key findings clearly.\n"
-        "- Preserves important technical terms, data, and context.\n"
-        "- Avoids unnecessary repetition or opinion.\n"
-        "- Uses formal academic tone and concise phrasing.\n"
-        "- Maintains coherence and logical flow.\n\n" 
-        "Academic Text:\n{text}\n\n"
-        "Research Summary:"
-    ),
+        template=(
+            "You are an expert academic researcher tasked with summarizing complex scholarly material.\n"
+            "Read the following academic text carefully and produce a structured, professional summary that:\n"
+            "- Captures the central argument, objectives, and key findings clearly.\n"
+            "- Preserves important technical terms, data, and context.\n"
+            "- Avoids unnecessary repetition or opinion.\n"
+            "- Uses formal academic tone and concise phrasing.\n"
+            "- Maintains coherence and logical flow.\n\n"
+            "Academic Text:\n{text}\n\n"
+            "Research Summary:"
+        ),
     )
 
-    llm = ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0.3)
-    chain = LLMChain(llm=llm, prompt=prompt)
-
+    chain = prompt | llm | parser
     try:
-        summary = chain.run(text=text)
-        return summary
+        return chain.invoke({"text": text})
     except Exception as e:
         return f"Error generating summary: {e}"
-    
+
+
+# ---------------------------
+# 2️⃣ Summarize PDF
+# ---------------------------
+def summarize_pdf(text: str) -> str:
+    prompt = PromptTemplate(
+        input_variables=["text"],
+        template=(
+            "You are an expert academic researcher.\n"
+            "Summarize the following PDF text clearly, capturing objectives, methods, results, "
+            "key findings, and conclusions.\n"
+            "Preserve technical terms and maintain formal academic tone.\n\n"
+            "PDF Text:\n{text}\n\nSummary:"
+        ),
+    )
+    chain = prompt | llm | parser
+    return chain.invoke({"text": text})
+
+
+# ---------------------------
+# 3️⃣ Enhance Prompt
+# ---------------------------
 def enhance_prompt(prompt_text: str) -> str:
     prompt = PromptTemplate(
         input_variables=["prompt_text"],
@@ -48,13 +74,40 @@ def enhance_prompt(prompt_text: str) -> str:
             "User Prompt: {prompt_text}\n\n"
             "Enhanced Prompt:"
         ),
-        )
+    )
 
-    llm = ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0.3)
-    chain = LLMChain(llm=llm, prompt=prompt)
-
+    chain = prompt | llm | parser
     try:
-        enhanced_prompt = chain.run(prompt_text=prompt_text)
-        return enhanced_prompt
+        return chain.invoke({"prompt_text": prompt_text})
     except Exception as e:
         return f"Error enhancing prompt: {e}"
+
+
+# ---------------------------
+# 4️⃣ Answer Question (Multi-PDF)
+# ---------------------------
+def answer_question(pdf_texts: list, question: str, conversation_history: str) -> str:
+    combined_texts = ""
+    for i, text in enumerate(pdf_texts, 1):
+        combined_texts += f"[PDF {i}]\n{text}\n\n"
+
+    print(combined_texts)
+    prompt = PromptTemplate(
+        input_variables=["pdfs", "question", "history"],
+        template=(
+            "You are an expert academic assistant.\n"
+            "Use the following PDFs and previous conversation to answer the user's question.\n\n"
+            "PDFs:\n{pdfs}\n\n"
+            "Conversation History:\n{history}\n\n"
+            "User Question:\n{question}\n\n"
+            "Answer in a clear, structured, academic tone. Include bullet points for technical/methodology steps. "
+            "Cite PDF numbers when referencing content."
+        ),
+    )
+
+    chain = prompt | llm | parser
+    return chain.invoke({
+        "pdfs": combined_texts,
+        "question": question,
+        "history": conversation_history
+    })
