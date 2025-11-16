@@ -21,12 +21,15 @@ async def search_arxiv(query: str, max_results: int = 5) -> List[Dict]:
     # Fetch results (arxiv library uses a generator)
     for result in client.results(search):
         authors = [author.name for author in result.authors]
+        # Ensure summary is never None
+        summary = result.summary if result.summary else "No abstract available"
         results_list.append({
             "title": result.title,
             "authors": authors,
-            "summary": result.summary,
+            "summary": str(summary),
             "link": result.entry_id,
-            "published": result.published.strftime("%Y-%m-%d")
+            "published": result.published.strftime("%Y-%m-%d"),
+            "source": "arxiv"
         })
     
     return results_list

@@ -10,7 +10,7 @@ st.title("📄 ScholarAssistant")
 # -----------------------
 # 🧭 Sidebar Navigation
 # -----------------------
-app_mode = st.sidebar.radio("Choose Feature:", ["Chat with PDF", "Citation Recommender"])
+app_mode = st.sidebar.radio("Choose Feature:", ["Chat with PDF", "Citation Recommender", "Semantic Search"])
 
 # -----------------------
 # 1️⃣ Chat with PDF
@@ -164,3 +164,162 @@ elif app_mode == "Citation Recommender":
                     mime="text/plain",
                     key=f"bib_{paper['title']}"
                 )
+
+# -----------------------
+# 3️⃣ Semantic Search
+# -----------------------
+elif app_mode == "Semantic Search":
+    # --- Session States ---
+    for key in ["semantic_results", "pipeline_results", "search_query", "semantic_input"]:
+        if key not in st.session_state:
+            st.session_state[key] = [] if "results" in key else ""
+    
+    st.subheader("🔍 Semantic Search")
+    st.markdown("Search across arXiv and Semantic Scholar using semantic similarity.")
+    
+    # --- Tabs for Search vs Pipeline ---
+    search_tab, pipeline_tab = st.tabs(["🔎 Search Only", "🔄 Full Pipeline"])
+    
+    # --- Search Only Tab ---
+    with search_tab:
+        with st.form("semantic_search_form", clear_on_submit=False):
+            st.session_state.semantic_input = st.text_input(
+                "Enter your search query:",
+                value=st.session_state.semantic_input,
+                placeholder="e.g., transformer architectures in natural language processing"
+            )
+            col1, col2 = st.columns(2)
+            with col1:
+                max_results = st.number_input("Max results per source", min_value=5, max_value=50, value=10)
+            with col2:
+                top_k = st.number_input("Top K results", min_value=5, max_value=50, value=20)
+            
+            submitted_search = st.form_submit_button("🔍 Search")
+        
+        if submitted_search:
+            if not st.session_state.semantic_input.strip():
+                st.warning("Please enter a search query!")
+            else:
+                with st.spinner("🔍 Searching arXiv and Semantic Scholar..."):
+                    try:
+                        API_URL = "http://localhost:8000/semantic/search"
+                        payload = {
+                            "query": st.session_state.semantic_input,
+                            "max_results_per_source": max_results,
+                            "top_k": top_k,
+                            "use_sbert": True
+                        }
+                        response = requests.post(API_URL, json=payload)
+                        response.raise_for_status()
+                        data = response.json()
+                        
+                        st.session_state.search_query = data["query"]
+                        st.session_state.semantic_results = data["results"]
+                        
+                    except Exception as e:
+                        st.error(f"❌ Error: {e}")
+        
+        # Display search results
+        if st.session_state.semantic_results:
+            st.markdown(f"### 📊 Found {len(st.session_state.semantic_results)} papers")
+            
+            for idx, paper in enumerate(st.session_state.semantic_results, 1):
+                with st.container():
+                    source_badge = "📚 arXiv" if paper.get("source") == "arxiv" else "🎓 Semantic Scholar"
+                    st.markdown(
+                        f"""
+                        <div style="border:1px solid #e0e0e0; padding:15px; border-radius:10px; margin-bottom:10px; background-color:#f9f9f9">
+                            <h4 style="margin:0; color:#2B7A78;">{idx}. {paper['title']}</h4>
+                            <p style="margin:0; font-size:14px; color:#555;"><strong>Authors:</strong> {', '.join(paper['authors'])}</p>
+                            <p style="margin:0; font-size:14px; color:#555;"><strong>Published:</strong> {paper['published']} | <strong>Source:</strong> {source_badge}</p>
+                            <p style="margin:0; font-size:14px; color:#555;"><strong>Semantic Score:</strong> {paper['score']:.4f}</p>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                    with st.expander("📖 Abstract"):
+                        st.write(paper['summary'])
+                    st.markdown(f"[🔗 View Paper]({paper['link']})")
+                    st.markdown("---")
+    
+    # --- Full Pipeline Tab ---
+    with pipeline_tab:
+        st.markdown("**Full Pipeline:** Search → Summarize → Generate Citations")
+        
+        with st.form("pipeline_form", clear_on_submit=False):
+            pipeline_query = st.text_input(
+                "Enter your query:",
+                placeholder="e.g., recent advances in large language models"
+            )
+            col1, col2 = st.columns(2)
+            with col1:
+                pipeline_max_results = st.number_input("Max results per source", min_value=5, max_value=50, value=10, key="pipeline_max")
+            with col2:
+                pipeline_top_k = st.number_input("Top K results", min_value=5, max_value=20, value=10, key="pipeline_top")
+            
+            generate_summary = st.checkbox("Generate summary from retrieved papers", value=True)
+            generate_citations = st.checkbox("Generate citation recommendations", value=True)
+            
+            submitted_pipeline = st.form_submit_button("🚀 Run Full Pipeline")
+        
+        if submitted_pipeline:
+            if not pipeline_query.strip():
+                st.warning("Please enter a query!")
+            else:
+                with st.spinner("🔄 Running full pipeline (this may take a moment)..."):
+                    try:
+                        API_URL = "http://localhost:8000/semantic/pipeline"
+                        payload = {
+                            "query": pipeline_query,
+                            "max_results_per_source": pipeline_max_results,
+                            "top_k": pipeline_top_k,
+                            "use_sbert": True,
+                            "generate_summary": generate_summary,
+                            "generate_citations": generate_citations
+                        }
+                        response = requests.post(API_URL, json=payload)
+                        response.raise_for_status()
+                        data = response.json()
+                        
+                        st.session_state.pipeline_results = data
+                        
+                    except Exception as e:
+                        st.error(f"❌ Error: {e}")
+        
+        # Display pipeline results
+        if st.session_state.pipeline_results:
+            pipeline_data = st.session_state.pipeline_results
+            
+            # Display summary
+            if pipeline_data.get("summary"):
+                st.markdown("### 📝 Generated Summary")
+                st.info(pipeline_data["summary"])
+                st.markdown("---")
+            
+            # Display retrieved papers
+            if pipeline_data.get("retrieved_papers"):
+                st.markdown(f"### 📚 Retrieved Papers ({len(pipeline_data['retrieved_papers'])})")
+                for idx, paper in enumerate(pipeline_data["retrieved_papers"][:5], 1):  # Show top 5
+                    with st.expander(f"{idx}. {paper['title']}"):
+                        st.write(f"**Authors:** {', '.join(paper['authors'])}")
+                        st.write(f"**Published:** {paper['published']}")
+                        st.write(f"**Score:** {paper['score']:.4f}")
+                        st.write(f"**Abstract:** {paper['summary'][:300]}...")
+                        st.markdown(f"[🔗 View Paper]({paper['link']})")
+            
+            # Display citations
+            if pipeline_data.get("citations"):
+                st.markdown("### 📖 Recommended Citations")
+                for idx, citation in enumerate(pipeline_data["citations"][:5], 1):  # Show top 5
+                    st.markdown(
+                        f"""
+                        <div style="border-left:4px solid #2B7A78; padding-left:10px; margin-bottom:10px;">
+                            <strong>{idx}. {citation['title']}</strong><br>
+                            <small>{', '.join(citation['authors'])} ({citation['published']})</small><br>
+                            <small>Relevance Score: {citation['score']:.4f}</small>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                    st.markdown(f"[🔗 View]({citation['link']})")
+                    st.markdown("---")

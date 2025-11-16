@@ -14,9 +14,7 @@ router = APIRouter(
     tags=["citation_router"],
 )
 
-# -----------------------
-# Pydantic models
-# -----------------------
+
 class CitationRequest(BaseModel):
     text: str
 
@@ -26,7 +24,7 @@ class Paper(BaseModel):
     summary: str
     link: str
     published: str
-    score: float  # similarity score
+    score: float #this is the similarity score
 
 class CitationResponse(BaseModel):
     query: str
@@ -55,20 +53,20 @@ async def recommend_citation(request: CitationRequest):
     user_text = request.text
     print("Received text:", user_text)
 
-    # Step 1: Generate high-quality search queries from text
-    queries = await generate_search_query(user_text)  # e.g., 3-5 queries
+    # Generating high-quality search queries from text then to find relevant papers
+    queries = await generate_search_query(user_text)
     print("Generated queries:", queries)
 
-    # Step 2: Get embedding of user input
+    # convwert user text to embedding
     user_embedding = await get_embedding(user_text)
 
-    # Step 3: Fetch candidate papers for all queries
+    # fetching candidate papers from arxiv for each query
     candidate_papers = []
     for query in queries:
         papers = await search_arxiv(query, max_results=5)
         candidate_papers.extend(papers)
 
-    # Step 4: Compute embeddings for paper abstracts and semantic similarity
+    # Computing embeddings for paper abstracts and semantic similarity
     for paper in candidate_papers:
         paper_embedding = await get_embedding(paper["summary"])
         score = cosine_similarity(
@@ -77,13 +75,13 @@ async def recommend_citation(request: CitationRequest):
         )[0][0]
         paper["score"] = float(score)
 
-    # Step 5: Deduplicate papers by link
+    # Remove duplicates
     unique_papers = {p['link']: p for p in candidate_papers}.values()
 
-    # Step 6: Rank papers by similarity score
+    # Ranking papers by similarity score
     ranked_papers = sorted(unique_papers, key=lambda x: x["score"], reverse=True)
 
     return {
         "query": ", ".join(queries),
-        "results": ranked_papers[:10]  # return top 10
+        "results": ranked_papers[:10]  
     }
