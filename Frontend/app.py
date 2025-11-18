@@ -89,11 +89,12 @@ if app_mode == "Chat with PDF":
 # -----------------------
 elif app_mode == "Citation Recommender":
     # --- Session States ---
-    for key in ["citation_results", "search_query", "text_input"]:
+    for key in ["citation_results", "search_query", "text_input", "sources_used"]:
         if key not in st.session_state:
-            st.session_state[key] = [] if key == "citation_results" else ""
+            st.session_state[key] = [] if key in ["citation_results", "sources_used"] else ""
 
     st.subheader("📚 Citation Recommender")
+    st.markdown("Find relevant citations from **arXiv** and **Semantic Scholar** based on semantic similarity.")
 
     # --- Input Form ---
     with st.form("citation_form", clear_on_submit=False):
@@ -102,42 +103,85 @@ elif app_mode == "Citation Recommender":
             height=200, 
             value=st.session_state.text_input
         )
+        
+        # Source selection options
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            use_arxiv = st.checkbox("Search arXiv", value=True)
+        with col2:
+            use_semantic_scholar = st.checkbox("Search Semantic Scholar", value=True)
+        with col3:
+            use_sbert = st.checkbox("Use Sentence-BERT (faster)", value=True)
+        
+        # Advanced options
+        with st.expander("⚙️ Advanced Options"):
+            max_results = st.number_input("Max results per source", min_value=3, max_value=20, value=5)
+            top_k = st.number_input("Top K results", min_value=5, max_value=30, value=10)
+        
         submitted = st.form_submit_button("🔍 Find Relevant Citations")
 
     # --- API Call ---
     if submitted:
         if not st.session_state.text_input.strip():
             st.warning("Please enter some text!")
+        elif not use_arxiv and not use_semantic_scholar:
+            st.warning("Please select at least one source (arXiv or Semantic Scholar)!")
         else:
-            with st.spinner("Generating query and fetching papers..."):
+            with st.spinner("🔍 Generating queries and searching arXiv & Semantic Scholar..."):
                 try:
                     API_URL = "http://localhost:8000/citation_router/recommend"
-                    response = requests.post(API_URL, json={"text": st.session_state.text_input})
+                    payload = {
+                        "text": st.session_state.text_input,
+                        "use_arxiv": use_arxiv,
+                        "use_semantic_scholar": use_semantic_scholar,
+                        "max_results_per_source": max_results,
+                        "top_k": top_k,
+                        "use_sbert": use_sbert
+                    }
+                    response = requests.post(API_URL, json=payload)
                     response.raise_for_status()
                     data = response.json()
 
-                    st.session_state.search_query = data["query"]
-                    st.session_state.citation_results = data["results"]
+                    st.session_state.search_query = data.get("query", "")
+                    st.session_state.citation_results = data.get("results", [])
+                    st.session_state.sources_used = data.get("sources_used", [])
 
                 except Exception as e:
                     st.error(f"❌ Error: {e}")
 
         # --- Display Results ---
-        # --- Display Results ---
     if st.session_state.citation_results:
+        # Show sources used
+        if hasattr(st.session_state, 'sources_used') and st.session_state.sources_used:
+            sources_badges = " | ".join([f"**{source}**" for source in st.session_state.sources_used])
+            st.markdown(f"### 📊 Sources: {sources_badges}")
+        
         st.markdown("### 🔍 Generated Search Query")
         st.info(st.session_state.search_query)
 
-        st.markdown("### 📄 Top Papers")
-        for paper in st.session_state.citation_results:
+        st.markdown(f"### 📄 Top {len(st.session_state.citation_results)} Papers")
+        for idx, paper in enumerate(st.session_state.citation_results, 1):
             with st.container():
+                # Determine source badge
+                source = paper.get('source', 'unknown')
+                if source == 'arxiv':
+                    source_badge = "📚 arXiv"
+                elif source == 'semantic_scholar':
+                    source_badge = "🎓 Semantic Scholar"
+                else:
+                    source_badge = "📄 Unknown Source"
+                
+                # Get venue if available
+                venue = paper.get('venue', '')
+                venue_text = f" | <strong>Venue:</strong> {venue}" if venue else ""
+                
                 st.markdown(
                     f"""
                     <div style="border:1px solid #e0e0e0; padding:15px; border-radius:10px; margin-bottom:10px; background-color:#f9f9f9">
-                        <h4 style="margin:0; color:#2B7A78;">{paper['title']}</h4>
-                        <p style="margin:0; font-size:14px; color:#555;"><strong>Authors:</strong> {', '.join(paper['authors'])}</p>
-                        <p style="margin:0; font-size:14px; color:#555;"><strong>Published:</strong> {paper['published']}</p>
-                        <p style="margin:0; font-size:14px; color:#555;"><strong>Semantic Score:</strong> {paper['score']:.4f}</p>
+                        <h4 style="margin:0; color:#2B7A78;">{idx}. {paper['title']}</h4>
+                        <p style="margin:0; font-size:14px; color:#555;"><strong>Authors:</strong> {', '.join(paper['authors']) if paper['authors'] else 'Unknown'}</p>
+                        <p style="margin:0; font-size:14px; color:#555;"><strong>Published:</strong> {paper['published']}{venue_text}</p>
+                        <p style="margin:0; font-size:14px; color:#555;"><strong>Source:</strong> {source_badge} | <strong>Semantic Score:</strong> {paper['score']:.4f}</p>
                     </div>
                     """,
                     unsafe_allow_html=True
@@ -146,24 +190,28 @@ elif app_mode == "Citation Recommender":
                 with st.expander("📖 Abstract"):
                     st.write(paper['summary'])
 
-                # ArXiv link
-                st.markdown(f"[🔗 View on ArXiv]({paper['link']})")
+                # Paper link
+                link_text = "🔗 View Paper" if source == 'arxiv' else "🔗 View on Semantic Scholar"
+                st.markdown(f"[{link_text}]({paper['link']})")
 
                 # BibTeX download
-                bibtex = f"""@article{{,
+                # Determine journal based on source
+                journal = "arXiv" if source == 'arxiv' else (venue if venue else "Semantic Scholar")
+                bibtex = f"""@article{{{paper.get('paperId', 'paper').replace('-', '') if paper.get('paperId') else 'paper'}{idx},
     title={{ {paper['title']} }},
-    author={{ {', '.join(paper['authors'])} }},
-    journal={{ arXiv }},
-    year={{ {paper['published'][:4]} }},
+    author={{ {', '.join(paper['authors']) if paper['authors'] else 'Unknown'} }},
+    journal={{ {journal} }},
+    year={{ {paper['published'][:4] if len(paper['published']) >= 4 else 'Unknown'} }},
     url={{ {paper['link']} }}
-    }}"""
+}}"""
                 st.download_button(
                     label="📥 Download BibTeX",
                     data=bibtex,
-                    file_name=f"{paper['title']}.bib",
+                    file_name=f"{paper['title'][:50].replace(' ', '_')}.bib",
                     mime="text/plain",
-                    key=f"bib_{paper['title']}"
+                    key=f"bib_{paper.get('paperId', idx)}_{hash(paper['title'])}"
                 )
+                st.markdown("---")
 
 # -----------------------
 # 3️⃣ Semantic Search
